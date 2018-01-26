@@ -4,6 +4,8 @@ const amqp = require('amqplib');
 const MongoClient = require('mongodb').MongoClient;
 const ObjectID = require('mongodb').ObjectID;
 const wat_action = require('wat_action_nightmare');
+const StopReason = require('./StopReason.js').StopReason;
+
 const QUEUE_NAME = 'player_queue';
 
 const TIME_OUT = 40000;
@@ -33,10 +35,11 @@ function start() {
 		this.ch.prefetch(1);
 		this.ch.consume(QUEUE_NAME, async (scenarioMsg) => {
 			if (scenarioMsg !== null) {
-				await playScenario.call(this, scenarioMsg);
+				var result = await playScenario.call(this, scenarioMsg);
 				await console.log("play finish");
+				await console.log(result);
 				await this.ch.sendToQueue(scenarioMsg.properties.replyTo,
-					new Buffer("true"),
+					new Buffer(JSON.stringify(result)),
 					{correlationId: scenarioMsg.properties.correlationId});
 				await this.ch.ack(scenarioMsg);
 			}
@@ -59,7 +62,7 @@ async function playScenario(scenarioMsg) {
 
 	const browser = new Nightmare({show:true, loadTimeout: TIME_OUT , gotoTimeout: TIME_OUT, switches:{'ignore-certificate-errors': true}});
 
-	await scenario.attachTo(browser)
+	return scenario.attachTo(browser)
 	.evaluate( (assert) => {
 		if (assert && !assert.end) {
 			var testedElement = document.getElementById(assert.selector);
@@ -71,7 +74,8 @@ async function playScenario(scenarioMsg) {
 				break;
 				default : obtained = '';
 			}
-			return obtained.indexOf(assert.contains) !== -1;
+			// return obtained.indexOf(assert.contains) !== -1;
+			return assert.contains;
 		} else {
 			return true;
 		}
@@ -81,11 +85,19 @@ async function playScenario(scenarioMsg) {
 		await winston.info('Scenario Success');
 		var _id = ObjectID();
 		await browser.screenshot().end().then();
+
+		await console.log('testResult is fowllowing: ');
+		await console.log(testResult);
+
 		if (testResult) {
 			await recordSuccessfulRun.call(this, scenarioMsg, _id);
+			var sucessResult = {"type" : "TPCA_IN_TS", "bid" : scenarioContent.bid, "noiseInfo" : scenarioContent.noiseInfo};
+			return Promise.resolve(sucessResult);
 		} else {
-			var error = 'assertion fails';
-			await recordErrorRun.call(this, scenarioMsg, _id, error);	
+			var error = 'assertionFails';
+			await recordErrorRun.call(this, scenarioMsg, _id, error);
+			var assertionFailsResult = {"type" : "TPCA_IN_TF", "bid" : scenarioContent.bid, "noiseInfo" : scenarioContent.noiseInfo};
+			return Promise.resolve(assertionFailsResult);	
 		}
 	})
 	.catch(async (e) => {
@@ -94,6 +106,13 @@ async function playScenario(scenarioMsg) {
 		var _id = ObjectID();
 		await browser.screenshot().end().then();
 		await recordErrorRun.call(this, scenarioMsg, _id, e);
+		//find where is the stops
+		// await console.log('scenarioContent is :');
+		// await console.log(scenarioContent);
+
+		var stopReason = new StopReason(scenarioContent,e);
+		var errResult = await stopReason.stopReason();
+		return Promise.resolve(errResult);
 	});
 }
 
@@ -101,8 +120,8 @@ function createWATScenario(scenario) {
 	var wait = scenario.wait || 0;
 	var cssSelector = scenario.cssselector || 'watId';
 	var actions = [];
-	winston.info(cssSelector);
-	console.log(scenario.actions);
+	// winston.info(cssSelector);
+	// console.log(scenario.actions);
 	scenario.actions.forEach((action) => {
 		var watAction = {
 			type: action.type

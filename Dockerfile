@@ -41,6 +41,7 @@ WORKDIR /tmp/run
 RUN mkdir screen
 COPY index.js .
 COPY Player.js .
+COPY StopReason.js .
 COPY package.json .
 RUN npm install
 
